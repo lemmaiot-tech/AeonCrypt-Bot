@@ -1,0 +1,9 @@
+.env
+/fastapivenv
+/.idea
+/__pycache__
+*.db
+/vectors
+/temp_uploads
+/uploads
+*.mp4

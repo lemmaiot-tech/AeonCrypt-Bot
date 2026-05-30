@@ -1,0 +1,940 @@
+// Generate or retrieve persistent user ID
+let userId = localStorage.getItem("user_id");
+if (!userId) {
+    userId = crypto.randomUUID();
+    localStorage.setItem("user_id", userId);
+}
+
+let ws = null;
+let isConnected = false;
+let reconnectAttempts = 0;
+let reconnectDelay = 2000;
+const maxReconnectAttempts = 10;
+
+let currentChatId = null;
+let documentMode = false;
+let documentSessionId = null;
+let documentFileNames = [];  // Array to track multiple files
+
+const messageInput = document.getElementById("messageInput");
+const sendBtn = document.getElementById("sendBtn");
+const chatMessages = document.getElementById("chatMessages");
+const chatForm = document.getElementById("chatForm");
+const charCount = document.getElementById("charCount");
+const heroSection = document.getElementById("heroSection");
+const newChatBtn = document.getElementById("newChatBtn");
+const chatList = document.getElementById("chatList");
+const toggleSidebarBtn = document.getElementById("toggleSidebar");
+const sidebar = document.getElementById("sidebar");
+const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+const mobileBreakpoint = window.matchMedia("(max-width: 768px)");
+const attachBtn = document.getElementById("attachBtn");
+const fileInput = document.getElementById("fileInput");
+const documentModeIndicator = document.getElementById("documentModeIndicator");
+const documentFileNameSpan = document.getElementById("documentFileName");
+const documentListDiv = document.getElementById("documentList");
+const exitDocumentModeBtn = document.getElementById("exitDocumentMode");
+
+// Knowledge Base elements
+const kbAdminBtn = document.getElementById("kbAdminBtn");
+const kbAdminPanel = document.getElementById("kbAdminPanel");
+const closeKbPanel = document.getElementById("closeKbPanel");
+const kbUploadBtn = document.getElementById("kbUploadBtn");
+const kbFileInput = document.getElementById("kbFileInput");
+const kbUploadArea = document.getElementById("kbUploadArea");
+const kbUploadProgress = document.getElementById("kbUploadProgress");
+const kbDocList = document.getElementById("kbDocList");
+const kbChunkCount = document.getElementById("kbChunkCount");
+
+const isMobileView = () => mobileBreakpoint.matches;
+
+const syncSidebarBackdrop = () => {
+    if (!sidebarBackdrop) {
+        return;
+    }
+
+    const showBackdrop = isMobileView() && !sidebar.classList.contains("closed");
+    sidebarBackdrop.classList.toggle("visible", showBackdrop);
+};
+
+const setSidebarOpen = (isOpen) => {
+    sidebar.classList.toggle("closed", !isOpen);
+    toggleSidebarBtn.setAttribute("aria-expanded", String(isOpen));
+    syncSidebarBackdrop();
+};
+
+let previousIsMobile = isMobileView();
+
+const syncSidebarForViewport = () => {
+    const nowMobile = isMobileView();
+    if (nowMobile !== previousIsMobile) {
+        setSidebarOpen(!nowMobile);
+        previousIsMobile = nowMobile;
+    } else {
+        syncSidebarBackdrop();
+    }
+};
+
+const scrollToLatest = () => {
+    requestAnimationFrame(() => {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+};
+
+const enterChatMode = () => {
+    if (document.body.classList.contains("chat-mode")) {
+        return;
+    }
+
+    document.body.classList.remove("initial-mode");
+    document.body.classList.add("chat-mode");
+    heroSection.setAttribute("aria-hidden", "true");
+    chatMessages.classList.remove("d-none");
+};
+
+const escapeHtml = (text) =>
+    text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+const formatText = (text) =>
+    escapeHtml(text)
+        .replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>')
+        .replace(/\n/g, "<br>");
+
+const renderAssistantContent = (node, raw) => {
+    const codeFenceRegex = /```([\w+-]*)\n?([\s\S]*?)```/g;
+    let html = "";
+    let cursor = 0;
+    let match;
+
+    while ((match = codeFenceRegex.exec(raw)) !== null) {
+        const plain = raw.slice(cursor, match.index);
+        if (plain) {
+            html += formatText(plain);
+        }
+
+        const language = (match[1] || "code").trim();
+        const code = escapeHtml(match[2].trimEnd());
+        html += `
+            <div class="code-block border border-secondary-subtle rounded-3 overflow-hidden my-2 bg-black">
+                <div class="d-flex justify-content-between align-items-center px-2 py-1 border-bottom border-secondary-subtle small text-secondary bg-dark">
+                    <span>${language}</span>
+                    <button type="button" class="copy-code-btn btn btn-outline-light btn-sm py-0 px-2">Copy</button>
+                </div>
+                <pre class="overflow-auto"><code>${code}</code></pre>
+            </div>
+        `;
+
+        cursor = match.index + match[0].length;
+    }
+
+    const tail = raw.slice(cursor);
+    if (tail) {
+        html += formatText(tail);
+    }
+
+    node.innerHTML = html || "&nbsp;";
+};
+
+const addMessage = (role, content = "") => {
+    enterChatMode();
+
+    const row = document.createElement("div");
+    row.className = `message-group d-flex ${role === "user" ? "justify-content-end" : "justify-content-start"} ${role}`;
+
+    const bubble = document.createElement("div");
+    bubble.className = role === "user" ? "user-msg" : "bot-msg";
+
+    if (role === "user") {
+        bubble.textContent = content;
+    } else {
+        bubble.dataset.rawContent = content;
+        renderAssistantContent(bubble, content);
+    }
+
+    row.appendChild(bubble);
+    chatMessages.appendChild(row);
+    scrollToLatest();
+    return bubble;
+};
+
+const appendStream = (chunk) => {
+    const botMessages = document.querySelectorAll(".message-group.bot .bot-msg");
+    if (!botMessages.length) {
+        return;
+    }
+
+    const last = botMessages[botMessages.length - 1];
+    const nextRaw = (last.dataset.rawContent || "") + chunk;
+    last.dataset.rawContent = nextRaw;
+    renderAssistantContent(last, nextRaw);
+    scrollToLatest();
+};
+
+const clearChat = () => {
+    chatMessages.innerHTML = "";
+    document.body.classList.remove("chat-mode");
+    document.body.classList.add("initial-mode");
+    heroSection.removeAttribute("aria-hidden");
+};
+
+const setInputState = (disabled) => {
+    sendBtn.disabled = disabled;
+    messageInput.disabled = disabled;
+};
+
+const attemptReconnect = () => {
+    if (reconnectAttempts >= maxReconnectAttempts) {
+        addMessage("bot", "❌ Unable to connect. Please refresh the page.");
+        return;
+    }
+
+    reconnectAttempts += 1;
+    setTimeout(connectWebSocket, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+};
+
+const connectWebSocket = () => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+    try {
+        ws = new WebSocket(wsUrl);
+    } catch (error) {
+        console.error("Failed to create WebSocket:", error);
+        attemptReconnect();
+        return;
+    }
+
+    ws.onopen = () => {
+        isConnected = true;
+        reconnectAttempts = 0;
+        reconnectDelay = 2000;
+        setInputState(false);
+    };
+
+    ws.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.type === "stream") {
+                appendStream(data.content);
+            } else if (data.type === "complete") {
+                setInputState(false);
+                scrollToLatest();
+            } else if (data.type === "error") {
+                addMessage("bot", `❌ Error: ${data.content}`);
+                setInputState(false);
+                scrollToLatest();
+            }
+        } catch (error) {
+            console.error("Error parsing message:", error);
+        }
+    };
+
+    ws.onerror = () => {
+        isConnected = false;
+    };
+
+    ws.onclose = () => {
+        isConnected = false;
+        attemptReconnect();
+    };
+};
+
+const sendMessage = async () => {
+    const text = messageInput.value.trim();
+    if (!text) {
+        return;
+    }
+
+    // Document Mode - Query the uploaded document
+    if (documentMode && documentSessionId) {
+        addMessage("user", text);
+        const botBubble = addMessage("bot", "");
+        messageInput.value = "";
+        messageInput.style.height = "auto";
+        charCount.textContent = "0";
+        setInputState(true);
+
+        try {
+            // Auto-create chat if one doesn't exist
+            if (!currentChatId) {
+                const res = await fetch("/new_chat", { 
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        user_id: userId
+                    })
+                });
+                const data = await res.json();
+                currentChatId = data.chat_id;
+                await loadChatList();
+            }
+
+            const response = await fetch("/query_document/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    session_id: documentSessionId,
+                    prompt: text,
+                    user_id: userId,
+                    chat_id: currentChatId
+                })
+            });
+
+            const data = await response.json();
+            
+            if (response.ok) {
+                botBubble.dataset.rawContent = data.answer;
+                renderAssistantContent(botBubble, data.answer);
+            } else {
+                botBubble.textContent = `❌ Error: ${data.error || "Failed to query document"}`;
+            }
+        } catch (error) {
+            botBubble.textContent = `❌ Error: ${error.message}`;
+        } finally {
+            setInputState(false);
+            scrollToLatest();
+        }
+        return;
+    }
+
+    // Normal Chat Mode
+    if (!isConnected) {
+        alert("Not connected to server. Trying to reconnect...");
+        return;
+    }
+
+    // Auto-create chat if one doesn't exist
+    if (!currentChatId) {
+        try {
+            const res = await fetch("/new_chat", { 
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    user_id: userId
+                })
+            });
+            const data = await res.json();
+            currentChatId = data.chat_id;
+            
+            // Refresh sidebar with new chat
+            await loadChatList();
+        } catch (error) {
+            console.error("Failed to create chat:", error);
+            alert("Failed to create chat. Please try again.");
+            return;
+        }
+    }
+
+    enterChatMode();
+    addMessage("user", text);
+    addMessage("bot", "");
+    messageInput.value = "";
+    messageInput.style.height = "auto";
+    charCount.textContent = "0";
+    setInputState(true);
+    
+    // Send message with chat_id and user_id
+    ws.send(JSON.stringify({ 
+        user_id: userId,
+        chat_id: currentChatId,
+        content: text 
+    }));
+};
+
+const createNewChat = async () => {
+    try {
+        const response = await fetch("/new_chat", { 
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                user_id: userId
+            })
+        });
+        const data = await response.json();
+        currentChatId = data.chat_id;
+        clearChat();
+        
+        // Exit document mode when creating a new chat
+        documentMode = false;
+        documentSessionId = null;
+        documentFileNames = [];
+        documentModeIndicator.style.display = "none";
+        documentListDiv.style.display = "none";
+        messageInput.placeholder = "Message AeonCrypt...";
+        
+        await loadChatList();
+        if (isMobileView()) {
+            setSidebarOpen(false);
+        }
+        setInputState(false);
+    } catch (error) {
+        console.error("Failed to create new chat:", error);
+        alert("Failed to create new chat");
+    }
+};
+
+const loadChatList = async () => {
+    try {
+        const response = await fetch(`/chats/${userId}`);
+        const chats = await response.json();
+        
+        chatList.innerHTML = "";
+        
+        if (chats.length === 0) {
+            chatList.innerHTML = '<div class="text-secondary p-3 text-center small">No chats yet</div>';
+            return;
+        }
+        
+        chats.forEach(chat => {
+            const chatItem = document.createElement("div");
+            chatItem.className = "chat-item";
+            chatItem.dataset.id = chat.chat_id;
+            chatItem.dataset.chatId = chat.chat_id;
+            
+            const titleSpan = document.createElement("span");
+            titleSpan.className = "chat-title";
+            titleSpan.textContent = chat.title;
+            titleSpan.title = chat.title;
+            
+            const menuBtn = document.createElement("button");
+            menuBtn.className = "chat-menu-btn";
+            menuBtn.type = "button";
+            menuBtn.textContent = "⋯";
+            
+            const menu = document.createElement("div");
+            menu.className = "chat-menu";
+            
+            const renameBtn = document.createElement("button");
+            renameBtn.className = "rename-chat";
+            renameBtn.type = "button";
+            renameBtn.textContent = "Rename";
+            
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "delete-chat";
+            deleteBtn.type = "button";
+            deleteBtn.textContent = "Delete";
+            
+            menu.appendChild(renameBtn);
+            menu.appendChild(deleteBtn);
+            
+            chatItem.appendChild(titleSpan);
+            chatItem.appendChild(menuBtn);
+            chatItem.appendChild(menu);
+            
+            if (chat.chat_id === currentChatId) {
+                chatItem.classList.add("active");
+            }
+            
+            titleSpan.addEventListener("click", () => loadChatMessages(chat.chat_id));
+            chatList.appendChild(chatItem);
+        });
+    } catch (error) {
+        console.error("Failed to load chats:", error);
+    }
+};
+
+const loadChatMessages = async (chatId) => {
+    try {
+        const response = await fetch(`/chat/${chatId}`);
+        
+        if (!response.ok) {
+            alert("Failed to load chat");
+            return;
+        }
+        
+        const messages = await response.json();
+        
+        clearChat();
+        currentChatId = chatId;
+        
+        // Exit document mode when switching chats
+        documentMode = false;
+        documentSessionId = null;
+        documentFileNames = [];
+        documentModeIndicator.style.display = "none";
+        documentListDiv.style.display = "none";
+        messageInput.placeholder = "Message AeonCrypt...";
+        
+        // Update active state in sidebar
+        document.querySelectorAll(".chat-item").forEach(item => {
+            item.classList.remove("active");
+            if (item.dataset.chatId === chatId) {
+                item.classList.add("active");
+            }
+        });
+        
+        if (messages.length > 0) {
+            enterChatMode();
+            messages.forEach(msg => {
+                addMessage(msg.role, msg.content);
+            });
+        }
+
+        if (isMobileView()) {
+            setSidebarOpen(false);
+        }
+
+        setInputState(false);
+    } catch (error) {
+        console.error("Failed to load chat messages:", error);
+        alert("Failed to load chat");
+    }
+};
+
+messageInput.addEventListener("input", () => {
+    messageInput.style.height = "auto";
+    messageInput.style.height = `${Math.min(messageInput.scrollHeight, 120)}px`;
+    charCount.textContent = messageInput.value.length;
+});
+
+chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendMessage();
+});
+
+sendBtn.addEventListener("click", sendMessage);
+
+messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+    }
+});
+
+chatMessages.addEventListener("click", async (event) => {
+    const button = event.target.closest(".copy-code-btn");
+    if (!button) {
+        return;
+    }
+
+    const code = button.closest(".code-block")?.querySelector("code")?.textContent || "";
+    if (!code) {
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(code);
+        button.textContent = "Copied!";
+        setTimeout(() => {
+            button.textContent = "Copy";
+        }, 1200);
+    } catch (error) {
+        console.error("Copy failed:", error);
+    }
+});
+
+newChatBtn.addEventListener("click", createNewChat);
+
+toggleSidebarBtn.addEventListener("click", () => {
+    const shouldOpen = sidebar.classList.contains("closed");
+    setSidebarOpen(shouldOpen);
+});
+
+sidebarBackdrop?.addEventListener("click", () => {
+    setSidebarOpen(false);
+});
+
+window.addEventListener("resize", syncSidebarForViewport);
+
+// Menu toggle handler
+document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("chat-menu-btn")) {
+        const menu = e.target.nextElementSibling;
+        const isVisible = menu.style.display === "flex";
+        
+        // Close all other menus
+        document.querySelectorAll(".chat-menu").forEach(m => {
+            m.style.display = "none";
+        });
+        
+        // Toggle current menu
+        menu.style.display = isVisible ? "none" : "flex";
+        e.stopPropagation();
+    } else if (!e.target.closest(".chat-menu")) {
+        // Close menu if clicking outside
+        document.querySelectorAll(".chat-menu").forEach(m => {
+            m.style.display = "none";
+        });
+    }
+});
+
+// Rename chat handler
+document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("rename-chat")) {
+        const chatId = e.target.closest(".chat-item").dataset.id;
+        const newName = prompt("Rename chat to:");
+        
+        if (!newName) return;
+        
+        fetch(`/chat/${chatId}/rename`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newName }),
+        }).then(() => loadChatList());
+    }
+});
+
+// Delete chat handler
+document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("delete-chat")) {
+        const chatId = e.target.closest(".chat-item").dataset.id;
+        
+        if (!confirm("Delete this chat?")) return;
+        
+        fetch(`/chat/${chatId}`, {
+            method: "DELETE",
+        }).then(() => {
+            if (currentChatId === chatId) {
+                currentChatId = null;
+                clearChat();
+            }
+            loadChatList();
+        });
+    }
+});
+
+window.addEventListener("load", async () => {
+    setSidebarOpen(!isMobileView());
+    connectWebSocket();
+    await loadChatList();
+    // Auto-create first chat if none exist
+    setTimeout(async () => {
+        const response = await fetch(`/chats/${userId}`);
+        const chats = await response.json();
+        if (chats.length === 0) {
+            await createNewChat();
+        }
+    }, 500);
+});
+
+// File attachment functionality
+attachBtn?.addEventListener("click", () => {
+    fileInput.click();
+});
+
+fileInput?.addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        for (const file of files) {
+            await uploadDocument(file);
+        }
+    }
+});
+
+exitDocumentModeBtn?.addEventListener("click", () => {
+    documentMode = false;
+    documentSessionId = null;
+    documentFileNames = [];
+    documentModeIndicator.style.display = "none";
+    messageInput.placeholder = "Message AeonCrypt...";
+});
+
+async function uploadDocument(file) {
+    const fileExt = file.name.split('.').pop().toLowerCase();
+    const allowedTypes = ['pdf', 'docx', 'txt', 'epub'];
+    
+    if (!allowedTypes.includes(fileExt)) {
+        alert(`Please upload a PDF, EPUB, DOCX, or TXT file. You selected: ${fileExt.toUpperCase()}`);
+        fileInput.value = "";
+        return;
+    }
+
+    const formData = new FormData();
+    // Reuse existing session ID if in document mode, otherwise create new one
+    const sessionId = documentSessionId || crypto.randomUUID();
+    formData.append("file", file);
+    formData.append("session_id", sessionId);
+
+    // Show upload indicator
+    const uploadMsg = addMessage("bot", `📤 Uploading ${file.name}...`);
+    setInputState(true);
+
+    try {
+        const response = await fetch("/load_document/", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            const isMerged = data.merged || false;
+            
+            if (isMerged) {
+                uploadMsg.textContent = `✅ ${data.filename} added to existing documents! Ask questions across all uploaded files.`;
+            } else {
+                uploadMsg.textContent = `✅ ${data.filename} uploaded successfully! You can now ask questions about it.`;
+            }
+            
+            // Enable document mode
+            documentMode = true;
+            documentSessionId = sessionId;
+            
+            // Track multiple filenames
+            if (!documentFileNames.includes(file.name)) {
+                documentFileNames.push(file.name);
+            }
+            
+            // Update UI to show all uploaded documents
+            updateDocumentIndicator();
+            
+            fileInput.value = "";
+            setInputState(false);
+        } else {
+            uploadMsg.textContent = `❌ Error: ${data.error || "Failed to upload document"}`;
+            setInputState(false);
+        }
+    } catch (error) {
+        uploadMsg.textContent = `❌ Error: ${error.message}`;
+        setInputState(false);
+    }
+    
+    scrollToLatest();
+}
+
+function updateDocumentIndicator() {
+    if (documentFileNames.length === 0) {
+        documentModeIndicator.style.display = "none";
+        documentListDiv.style.display = "none";
+        messageInput.placeholder = "Message AeonCrypt...";
+        return;
+    }
+    
+    if (documentFileNames.length === 1) {
+        documentFileNameSpan.textContent = `📄 ${documentFileNames[0]}`;
+        documentListDiv.style.display = "none";
+        messageInput.placeholder = `Ask questions about ${documentFileNames[0]}...`;
+    } else {
+        documentFileNameSpan.textContent = `📄 ${documentFileNames.length} documents loaded (click to view)`;
+        documentFileNameSpan.style.cursor = "pointer";
+        messageInput.placeholder = `Ask questions about your ${documentFileNames.length} documents...`;
+        
+        // Populate document list
+        documentListDiv.innerHTML = documentFileNames.map((name, idx) => 
+            `<div class="doc-item">${idx + 1}. ${name}</div>`
+        ).join('');
+    }
+    
+    documentModeIndicator.style.display = "flex";
+}
+
+// Toggle document list visibility on click
+documentFileNameSpan?.addEventListener("click", () => {
+    if (documentFileNames.length > 1) {
+        const isVisible = documentListDiv.style.display === "block";
+        documentListDiv.style.display = isVisible ? "none" : "block";
+    }
+});
+
+// ============================================================
+// Knowledge Base Admin Panel
+// ============================================================
+
+// Toggle KB admin panel
+kbAdminBtn?.addEventListener("click", () => {
+    const isVisible = kbAdminPanel.style.display !== "none";
+    kbAdminPanel.style.display = isVisible ? "none" : "flex";
+    
+    if (!isVisible) {
+        // Hide chat messages and show admin panel
+        chatMessages.style.display = "none";
+        heroSection.style.display = "none";
+        loadKbDocuments();
+    } else {
+        chatMessages.style.display = "";
+        heroSection.style.display = "";
+    }
+});
+
+closeKbPanel?.addEventListener("click", () => {
+    kbAdminPanel.style.display = "none";
+    chatMessages.style.display = "";
+    heroSection.style.display = "";
+});
+
+// Upload button click
+kbUploadBtn?.addEventListener("click", () => {
+    kbFileInput.click();
+});
+
+// File selection handler
+kbFileInput?.addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        for (const file of files) {
+            await uploadToKnowledgeBase(file);
+        }
+    }
+    kbFileInput.value = "";
+});
+
+// Drag and drop support
+kbUploadArea?.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    kbUploadArea.classList.add("kb-dragover");
+});
+
+kbUploadArea?.addEventListener("dragleave", () => {
+    kbUploadArea.classList.remove("kb-dragover");
+});
+
+kbUploadArea?.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    kbUploadArea.classList.remove("kb-dragover");
+    
+    const files = Array.from(e.dataTransfer.files);
+    const allowedTypes = ['.pdf', '.epub', '.docx', '.txt'];
+    
+    for (const file of files) {
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        if (allowedTypes.includes(ext)) {
+            await uploadToKnowledgeBase(file);
+        } else {
+            showKbUploadMessage(`❌ ${file.name}: Unsupported file type. Allowed: PDF, EPUB, DOCX, TXT`, "error");
+        }
+    }
+});
+
+async function uploadToKnowledgeBase(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    // Show progress
+    showKbUploadMessage(`📤 Uploading ${file.name}...`, "info");
+    
+    try {
+        const response = await fetch("/kb/upload", {
+            method: "POST",
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showKbUploadMessage(`✅ ${file.name} added to knowledge base!`, "success");
+        } else if (response.status === 409) {
+            showKbUploadMessage(`⚠️ ${file.name}: Already uploaded.`, "warning");
+        } else {
+            showKbUploadMessage(`❌ ${file.name}: ${data.error || "Upload failed"}`, "error");
+        }
+    } catch (error) {
+        showKbUploadMessage(`❌ ${file.name}: ${error.message}`, "error");
+    }
+    
+    // Refresh document list
+    await loadKbDocuments();
+}
+
+function showKbUploadMessage(message, type) {
+    const msgEl = document.createElement("div");
+    msgEl.className = `kb-upload-msg kb-msg-${type}`;
+    msgEl.textContent = message;
+    
+    kbUploadProgress.appendChild(msgEl);
+    kbUploadProgress.style.display = "block";
+    
+    // Auto-remove after a few seconds
+    setTimeout(() => {
+        msgEl.remove();
+        if (kbUploadProgress.children.length === 0) {
+            kbUploadProgress.style.display = "none";
+        }
+    }, 5000);
+}
+
+async function loadKbDocuments() {
+    kbDocList.innerHTML = '<div class="kb-loading">Loading documents...</div>';
+    
+    try {
+        const response = await fetch("/kb/status");
+        const data = await response.json();
+        
+        if (data.documents.length === 0) {
+            kbDocList.innerHTML = '<div class="kb-empty">No documents uploaded yet. Upload PDF, EPUB, DOCX, or TXT files above.</div>';
+        } else {
+            kbDocList.innerHTML = data.documents.map(doc => `
+                <div class="kb-doc-item" data-id="${doc.id}">
+                    <div class="kb-doc-info">
+                        <span class="kb-doc-icon">${getFileIcon(doc.file_type)}</span>
+                        <div class="kb-doc-details">
+                            <span class="kb-doc-name">${escapeHtml(doc.filename)}</span>
+                            <span class="kb-doc-meta">${doc.file_type} • ${doc.chunk_count} chunks • ${formatDate(doc.uploaded_at)}</span>
+                        </div>
+                    </div>
+                    <button type="button" class="kb-doc-delete" title="Remove from knowledge base" data-id="${doc.id}">🗑️</button>
+                </div>
+            `).join('');
+            
+            // Add delete handlers
+            document.querySelectorAll(".kb-doc-delete").forEach(btn => {
+                btn.addEventListener("click", async () => {
+                    const docId = btn.dataset.id;
+                    if (confirm("Remove this document from the knowledge base?")) {
+                        await deleteKbDocument(docId);
+                    }
+                });
+            });
+        }
+        
+        // Update chunk count
+        kbChunkCount.textContent = data.chunk_count || 0;
+        
+    } catch (error) {
+        kbDocList.innerHTML = `<div class="kb-error">❌ Failed to load documents: ${error.message}</div>`;
+    }
+}
+
+async function deleteKbDocument(docId) {
+    try {
+        const response = await fetch(`/kb/document/${docId}`, {
+            method: "DELETE"
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            // Refresh list
+            await loadKbDocuments();
+        } else {
+            alert(`Failed to delete: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
+}
+
+function getFileIcon(fileType) {
+    const icons = {
+        'PDF': '📕',
+        'EPUB': '📖',
+        'DOCX': '📘',
+        'TXT': '📄'
+    };
+    return icons[fileType] || '📄';
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr + 'Z');
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}

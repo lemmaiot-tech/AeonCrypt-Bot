@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AeonCrypt's Chatbot</title>
+    <link rel="icon" type="image/jpeg" href="/static/AeonCrypt.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-black text-light initial-mode" data-bs-theme="dark">
+    <div class="aurora-layer" aria-hidden="true">
+        <span class="aurora orb-1"></span>
+        <span class="aurora orb-2"></span>
+        <span class="aurora orb-3"></span>
+    </div>
+
+    <div class="app">
+        <div class="topbar">
+            <button id="toggleSidebar" type="button" aria-label="Toggle chat sidebar" aria-expanded="true">☰</button>
+            <button id="newChatBtn" type="button" aria-label="Create new chat">+ New Chat</button>
+            <button id="kbAdminBtn" type="button" class="kb-admin-btn" aria-label="Knowledge Base Manager">📚 KB</button>
+        </div>
+
+        <div class="app-container">
+            <aside id="sidebar" class="sidebar">
+                <div id="chatList" class="chat-list">
+                    <!-- Chats will be populated here -->
+                </div>
+            </aside>
+
+            <div id="sidebarBackdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+            <div class="main" id="chatApp">
+                <section id="heroSection" class="hero-section">
+                    <h1>How can I help?</h1>
+                </section>
+
+                <main id="chatMessages"></main>
+
+                <!-- Knowledge Base Admin Panel (initially hidden) -->
+                <div id="kbAdminPanel" class="kb-admin-panel" style="display: none;">
+                    <div class="kb-admin-header">
+                        <h2>📚 Knowledge Base Manager</h2>
+                        <button id="closeKbPanel" type="button" class="kb-close-btn">✕</button>
+                    </div>
+                    <div class="kb-admin-body">
+                        <div class="kb-upload-section">
+                            <h3>Upload Documents</h3>
+                            <p class="kb-help-text">Upload PDF, EPUB, DOCX, or TXT files. They will be processed and added to the persistent knowledge base. The bot will use this knowledge when answering chat questions.</p>
+                            <div class="kb-upload-area" id="kbUploadArea">
+                                <input type="file" id="kbFileInput" accept=".pdf,.epub,.docx,.txt" multiple hidden>
+                                <button id="kbUploadBtn" type="button" class="kb-upload-btn">📤 Choose Files</button>
+                                <span class="kb-upload-hint">or drag & drop files here</span>
+                            </div>
+                            <div id="kbUploadProgress" class="kb-upload-progress" style="display: none;"></div>
+                        </div>
+                        <div class="kb-documents-section">
+                            <h3>Uploaded Documents</h3>
+                            <div id="kbDocList" class="kb-doc-list">
+                                <div class="kb-loading">Loading documents...</div>
+                            </div>
+                            <div id="kbStatus" class="kb-status">
+                                <span>Total chunks: <strong id="kbChunkCount">0</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="composerDock">
+                    <div class="composer-panel">
+                        <div id="documentModeIndicator" class="document-mode-indicator" style="display: none;">
+                            <div class="document-info">
+                                <span id="documentFileName">📄 Document Mode Active</span>
+                                <div id="documentList" class="document-list" style="display: none;"></div>
+                            </div>
+                            <button type="button" id="exitDocumentMode" class="exit-document-btn">Exit</button>
+                        </div>
+                        <form id="chatForm">
+                            <input type="file" id="fileInput" accept=".pdf,.epub,.docx,.txt" multiple hidden>
+                            <button type="button" id="attachBtn" class="attach-btn" title="Attach document (PDF, EPUB, DOCX, TXT)">
+                                📎
+                            </button>
+                            <textarea
+                                id="messageInput"
+                                placeholder="Message AeonCrypt..."
+                                rows="1"
+                                maxlength="2000"
+                                style="resize: none; max-height: 120px;"></textarea>
+                            <button type="submit" id="sendBtn">Send</button>
+                        </form>
+                        <small class="char-counter"><span id="charCount">0</span>/2000</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+</html>
