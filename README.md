@@ -1,16 +1,18 @@
 # AeonCrypt's Chatbot - FastAPI + Groq + RAG
 
-A full-featured AI chatbot built with FastAPI, WebSocket streaming, SQLite persistence, and document-based RAG (Retrieval-Augmented Generation).  
-It supports normal conversation, multi-chat history, and Multi document Q&A over PDF/DOCX/TXT files.
+A full-featured AI chatbot built with FastAPI, WebSocket streaming, SQLite persistence, and document-based RAG (Retrieval-Augmented Generation).
+It supports normal conversation, multi-chat history, and Multi document Q&A over PDF/DOCX/TXT/EPUB files.
 
 ## ✨ Features
 
 - Real-time streaming chat responses
 - Persistent chat history with multi-chat sidebar
-- Upload and query PDF, DOCX, and TXT files
+- Upload and query PDF, DOCX, TXT, and EPUB files
 - Multi-document merge into one searchable knowledge base
 - FAISS-based vector retrieval with context-aware prompting
-- Responsive frontend with code block rendering
+- Responsive frontend with code block rendering (marked.js + highlight.js)
+- Admin-protected Knowledge Base management panel
+- CORS-enabled API and Docker/Fly.io deployment ready
 
 ## 🧠 How It Works
 
@@ -22,12 +24,12 @@ It supports normal conversation, multi-chat history, and Multi document Q&A over
 - Assistant response streams back to UI in real time
 
 ### 2) Document (RAG) Flow
-- User uploads document to `/load_document/`
-- Backend parses file, chunks content, creates embeddings using Hugging Face Inference API model `sentence-transformers/all-MiniLM-L6-v2`
-- Embeddings are saved in FAISS under `vectors/<session_id>`
-- User asks questions via `/query_document/`
-- Retriever pulls relevant chunks and model answers with context
+- Admin uploads document(s) to `/load_document/` from the Knowledge Base panel
+- Backend parses the file (PDF/DOCX/TXT/EPUB), chunks content, creates embeddings using the Hugging Face Inference API model `sentence-transformers/all-MiniLM-L6-v2`
+- Embeddings are saved in a single global FAISS index under `vectors/knowledge_base` (per-session vectors are a legacy path)
+- User asks questions via WebSocket; the retriever pulls the top-k relevant chunks and the model answers with context
 - Q&A is saved to chat history when `user_id` and `chat_id` are provided
+- Admin can list/clear the knowledge base via `/admin/knowledge_base` (token-protected)
 
 ## 📁 Project Structure
 

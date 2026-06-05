@@ -12,5 +12,5 @@ faiss-cpu==1.13.2
 pypdf==4.2.0
 python-docx==1.1.0
 docx2txt==0.9
-EbookLib==0.18
+EbookLib>=0.19
 beautifulsoup4==4.12.3

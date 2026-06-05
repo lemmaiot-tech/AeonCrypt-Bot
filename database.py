@@ -1,9 +1,14 @@
 import sqlite3
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
-DATABASE_FILE = "chat.db"
+# Use persistent storage if available (Fly.io volume mounted at /app/data)
+DATA_DIR = os.getenv("DATA_DIR", "/app/data" if os.path.exists("/app/data") else ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DATABASE_FILE = os.path.join(DATA_DIR, "chat.db")
 
 
 def init_db():
@@ -317,7 +322,7 @@ def build_prompt(chat_id: str, user_message: str, context_chunks: list = None) -
     # If we have knowledge base context, inject it into the system prompt
     if context_chunks:
         context_text = "\n\n".join(context_chunks)
-        system_content += f"\n\n=== KNOWLEDGE BASE CONTEXT ===\nUse the following information from uploaded documents to answer the user's question. If the information is relevant, prioritize it. If it's not relevant to the question, rely on your own knowledge.\n\n{context_text}\n\n=== END OF CONTEXT ==="
+        system_content += f"\n\n=== KNOWLEDGE BASE CONTEXT ===\nYou MUST only answer using the information provided below from uploaded documents. If the user's question cannot be answered from this context, respond with: \"I don't have that information in my knowledge base. Please upload relevant documents or ask a question related to the uploaded content.\"\nDo NOT use your own general knowledge. Only use the context below.\n\n{context_text}\n\n=== END OF CONTEXT ==="
 
     system_prompt = {"role": "system", "content": system_content}
     

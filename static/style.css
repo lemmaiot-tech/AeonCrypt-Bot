@@ -511,6 +511,247 @@ body:not(.chat-mode) .main {
     border: none;
 }
 
+/* Code block header (language + copy button) */
+.code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.4rem 0.75rem;
+    background: #161b22;
+    border-bottom: 1px solid #2a3038;
+    font-size: 0.78rem;
+    gap: 0.5rem;
+}
+
+.code-lang {
+    color: #8b949e;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.copy-code-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #c9d1d9;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.copy-code-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.25);
+    color: #fff;
+}
+
+.code-block pre.hljs {
+    margin: 0;
+    padding: 0.75rem;
+    overflow-x: auto;
+    background: #0d1117;
+}
+
+/* ============================================================
+   Markdown Rendered Content Styles (inside .bot-msg)
+   ============================================================ */
+
+.bot-msg p {
+    margin: 0 0 0.6rem 0;
+    line-height: 1.6;
+}
+
+.bot-msg p:last-child {
+    margin-bottom: 0;
+}
+
+.bot-msg h1,
+.bot-msg h2,
+.bot-msg h3,
+.bot-msg h4,
+.bot-msg h5,
+.bot-msg h6 {
+    color: #f0f4ff;
+    margin: 1rem 0 0.4rem 0;
+    line-height: 1.3;
+}
+
+.bot-msg h1 { font-size: 1.35rem; }
+.bot-msg h2 { font-size: 1.2rem; }
+.bot-msg h3 { font-size: 1.08rem; }
+.bot-msg h4 { font-size: 1rem; }
+.bot-msg h5 { font-size: 0.95rem; }
+.bot-msg h6 { font-size: 0.9rem; color: #9aa6b7; }
+
+.bot-msg h1:first-child,
+.bot-msg h2:first-child,
+.bot-msg h3:first-child {
+    margin-top: 0;
+}
+
+.bot-msg ul,
+.bot-msg ol {
+    margin: 0.4rem 0 0.6rem 0;
+    padding-left: 1.5rem;
+}
+
+.bot-msg li {
+    margin-bottom: 0.25rem;
+    line-height: 1.55;
+}
+
+.bot-msg li > ul,
+.bot-msg li > ol {
+    margin: 0.15rem 0;
+}
+
+.bot-msg blockquote {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.85rem;
+    border-left: 3px solid var(--brand);
+    background: rgba(47, 109, 255, 0.08);
+    border-radius: 0 6px 6px 0;
+    color: #c5d0e6;
+}
+
+.bot-msg blockquote p {
+    margin: 0;
+}
+
+.bot-msg hr {
+    border: none;
+    border-top: 1px solid #394455;
+    margin: 0.8rem 0;
+}
+
+.bot-msg table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    font-size: 0.88rem;
+    overflow-x: auto;
+    display: block;
+}
+
+.bot-msg thead {
+    background: rgba(47, 109, 255, 0.12);
+}
+
+.bot-msg th,
+.bot-msg td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #394455;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.bot-msg th {
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.bot-msg td {
+    color: #c5d0e6;
+}
+
+.bot-msg strong {
+    font-weight: 600;
+    color: #f0f4ff;
+}
+
+.bot-msg em {
+    font-style: italic;
+    color: #c5d0e6;
+}
+
+.bot-msg del {
+    text-decoration: line-through;
+    color: #8b949e;
+}
+
+.bot-msg a {
+    color: #5b9eff;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+}
+
+.bot-msg a:hover {
+    border-bottom-color: #5b9eff;
+}
+
+.bot-msg img {
+    max-width: 100%;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+}
+
+/* ============================================================
+   Message Toolbar (Copy / Share / Feedback)
+   ============================================================ */
+
+.msg-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    margin-top: 0.5rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.bot-msg:hover .msg-toolbar,
+.msg-toolbar:focus-within {
+    opacity: 1;
+}
+
+.msg-toolbar-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #7a869a;
+    cursor: pointer;
+    padding: 0.25rem 0.45rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    line-height: 1;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+}
+
+.msg-toolbar-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+}
+
+.msg-toolbar-btn.active {
+    background: rgba(47, 109, 255, 0.2);
+    border-color: rgba(47, 109, 255, 0.4);
+    color: #5b9eff;
+}
+
+.feedback-btn.active.feedback-up {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.3);
+}
+
+.feedback-btn.active.feedback-down {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
 body.chat-mode .hero-section {
     display: none;
 }
@@ -1016,6 +1257,133 @@ body.chat-mode .hero-section {
         font-size: 0.75rem;
         padding: 0.5rem;
     }
+}
+
+/* ============================================================
+   Admin Login Modal
+   ============================================================ */
+
+.admin-login-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+}
+
+.admin-login-modal {
+    background: #1a2030;
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+.admin-login-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--panel-border);
+}
+
+.admin-login-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #f5f7fb;
+}
+
+.admin-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.admin-close-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f5f7fb;
+}
+
+.admin-login-body {
+    padding: 20px;
+}
+
+.admin-login-body p {
+    margin: 0 0 16px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+#adminLoginForm {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#adminPasswordInput {
+    width: 100%;
+    padding: 10px 14px;
+    background: #0f1115;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    color: #f5f7fb;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#adminPasswordInput:focus {
+    border-color: var(--brand);
+}
+
+#adminPasswordInput::placeholder {
+    color: #555;
+}
+
+#adminLoginBtn {
+    width: 100%;
+    padding: 10px;
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+#adminLoginBtn:hover:not(:disabled) {
+    background: var(--brand-hover);
+}
+
+#adminLoginBtn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.admin-login-error {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: rgba(220, 53, 69, 0.15);
+    border: 1px solid rgba(220, 53, 69, 0.3);
+    border-radius: 6px;
+    color: #ff6b6b;
+    font-size: 0.85rem;
+    text-align: center;
 }
 </write_to_file>
 <task_progress>

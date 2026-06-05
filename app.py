@@ -1,12 +1,16 @@
 from groq import Groq
-from fastapi import FastAPI, WebSocket, Body, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, WebSocket, Body, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 import json
 from uuid import uuid4
 import hashlib
+import secrets
+import time
+from typing import Optional
 from database import (
     init_db,
     save_message,
@@ -26,8 +30,8 @@ from database import (
     get_all_document_hashes,
 )
 
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -45,7 +49,36 @@ import traceback
 load_dotenv()
 app = FastAPI()
 
+# Use persistent storage if available (Fly.io volume mounted at /app/data)
+DATA_DIR = os.getenv("DATA_DIR", "/app/data" if os.path.exists("/app/data") else ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# ============================================================
+# Admin Authentication (simple token-based for KB management)
+# ============================================================
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "mube-admin-2024")
+admin_tokens = {}  # {token: expiry_timestamp}
+TOKEN_EXPIRY_SECONDS = 24 * 60 * 60  # 24 hours
+
+
+def verify_admin_token(authorization: Optional[str] = Header(None)) -> bool:
+    """Dependency that verifies admin auth token from Authorization header."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+    
+    token = authorization.replace("Bearer ", "").strip()
+    if not token or token not in admin_tokens:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Check expiry
+    if time.time() > admin_tokens[token]:
+        del admin_tokens[token]
+        raise HTTPException(status_code=401, detail="Token expired, please login again")
+    
+    return True
 
 
 class HFInferenceEmbeddings(Embeddings):
@@ -115,13 +148,13 @@ session_store = {}
 # Persistent Knowledge Base (Single global vector store)
 # ============================================================
 
-KNOWLEDGE_BASE_PATH = "vectors/knowledge_base"
-KB_UPLOADS_PATH = "uploads/knowledge_base"
+KNOWLEDGE_BASE_PATH = os.path.join(DATA_DIR, "vectors/knowledge_base")
+KB_UPLOADS_PATH = os.path.join(DATA_DIR, "uploads/knowledge_base")
 _global_vectorstore = None
 
 def get_knowledge_base_path():
     """Get the path for the persistent knowledge base index."""
-    os.makedirs("vectors", exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "vectors"), exist_ok=True)
     return KNOWLEDGE_BASE_PATH
 
 
@@ -261,6 +294,37 @@ async def startup_event():
     print(f"Knowledge base status: {'loaded' if knowledge_base_has_documents() else 'empty'}")
 
 
+@app.post("/admin/login")
+async def admin_login(body: dict = Body(...)):
+    """Authenticate admin and return a token for KB management."""
+    password = body.get("password", "")
+    
+    if not secrets.compare_digest(password, ADMIN_PASSWORD):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid password"}
+        )
+    
+    # Generate a token that expires in 24 hours
+    token = secrets.token_urlsafe(32)
+    admin_tokens[token] = time.time() + TOKEN_EXPIRY_SECONDS
+    
+    return {
+        "token": token,
+        "message": "Admin authenticated successfully",
+        "expires_in": TOKEN_EXPIRY_SECONDS,
+    }
+
+
+@app.post("/admin/logout")
+async def admin_logout(authorization: Optional[str] = Header(None)):
+    """Invalidate admin token."""
+    if authorization:
+        token = authorization.replace("Bearer ", "").strip()
+        admin_tokens.pop(token, None)
+    return {"message": "Logged out"}
+
+
 @app.get("/")
 async def get_home():
     return FileResponse("templates/index.html")
@@ -347,6 +411,12 @@ async def websocket_endpoint(websocket: WebSocket):
             context_chunks = []
             if knowledge_base_has_documents():
                 context_chunks = retrieve_from_knowledge_base(user_content, k=4)
+                if context_chunks:
+                    print(f"[KB] Retrieved {len(context_chunks)} context chunks for query: {user_content[:80]}...")
+                else:
+                    print(f"[KB] No chunks retrieved (vectorstore exists but similarity search returned empty). Query: {user_content[:80]}...")
+            else:
+                print(f"[KB] Knowledge base has no documents. Query processed without KB context.")
 
             # Build prompt with knowledge base context
             chat_log = build_prompt(chat_id, user_content, context_chunks=context_chunks if context_chunks else None)
@@ -384,7 +454,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/kb/status")
 async def kb_status():
-    """Get knowledge base status."""
+    """Get knowledge base status (public - used during chat to check if KB exists)."""
     vs = get_global_vectorstore()
     doc_count = 0
     chunk_count = 0
@@ -405,8 +475,51 @@ async def kb_status():
     }
 
 
+@app.get("/kb/debug")
+async def kb_debug():
+    """Debug endpoint to check KB retrieval status (admin only)."""
+    vs = get_global_vectorstore()
+    info = {
+        "vectorstore_loaded": vs is not None,
+        "vectorstore_path": KNOWLEDGE_BASE_PATH,
+        "vectorstore_exists_on_disk": os.path.exists(KNOWLEDGE_BASE_PATH),
+        "uploads_path": KB_UPLOADS_PATH,
+        "uploads_exists": os.path.exists(KB_UPLOADS_PATH),
+    }
+    
+    if vs is not None:
+        try:
+            info["total_vectors"] = vs.index.ntotal
+        except Exception as e:
+            info["total_vectors_error"] = str(e)
+    
+    # List files in uploads
+    uploads_path = get_kb_uploads_path()
+    if os.path.exists(uploads_path):
+        info["uploaded_files"] = os.listdir(uploads_path)
+    else:
+        info["uploaded_files"] = []
+    
+    # List files in vectors dir
+    vectors_dir = os.path.join(DATA_DIR, "vectors")
+    if os.path.exists(vectors_dir):
+        info["vector_files"] = os.listdir(vectors_dir)
+    else:
+        info["vector_files"] = []
+    
+    # Test a sample retrieval
+    try:
+        if vs is not None:
+            docs = vs.similarity_search("test", k=2)
+            info["sample_retrieval"] = {"count": len(docs), "preview": docs[0].page_content[:200] if docs else "none"}
+    except Exception as e:
+        info["sample_retrieval_error"] = str(e)
+    
+    return info
+
+
 @app.post("/kb/upload")
-async def kb_upload(file: UploadFile = File(...)):
+async def kb_upload(file: UploadFile = File(...), _admin: bool = Depends(verify_admin_token)):
     """Upload a document to the persistent knowledge base.
     
     Supports: PDF, DOCX, TXT, EPUB
@@ -414,8 +527,8 @@ async def kb_upload(file: UploadFile = File(...)):
     New files are merged into the existing knowledge base index.
     """
     print(f"Received document for knowledge base: {file.filename}")
-    os.makedirs("temp_uploads", exist_ok=True)
-    os.makedirs("vectors", exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "temp_uploads"), exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "vectors"), exist_ok=True)
 
     # Check file type
     file_ext = file.filename.lower().split('.')[-1]
@@ -526,8 +639,46 @@ async def kb_upload(file: UploadFile = File(...)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+# ============================================================
+# Feedback Endpoint
+# ============================================================
+
+@app.post("/feedback")
+async def submit_feedback(body: dict = Body(...)):
+    """Store user feedback on a bot response."""
+    user_id = body.get("user_id")
+    chat_id = body.get("chat_id")
+    message_index = body.get("message_index", -1)
+    feedback = body.get("feedback")  # "positive" or "negative"
+
+    if not user_id or not chat_id or feedback not in ("positive", "negative"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "user_id, chat_id, and valid feedback are required."}
+        )
+
+    # Append feedback to a JSON-lines log file
+    feedback_dir = os.path.join(DATA_DIR, "feedback")
+    os.makedirs(feedback_dir, exist_ok=True)
+    feedback_file = os.path.join(feedback_dir, "feedback.jsonl")
+
+    entry = {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "message_index": message_index,
+        "feedback": feedback,
+    }
+
+    try:
+        with open(feedback_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+        return {"status": "recorded"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.delete("/kb/document/{doc_id}")
-async def kb_delete_document(doc_id: int):
+async def kb_delete_document(doc_id: int, _admin: bool = Depends(verify_admin_token)):
     """Delete a document from the knowledge base and rebuild the index from remaining docs."""
     global _global_vectorstore
     
@@ -653,7 +804,7 @@ def _reload_document_chunks_from_hash(doc_info: dict) -> list:
 
 
 @app.post("/kb/rebuild")
-async def kb_rebuild():
+async def kb_rebuild(_admin: bool = Depends(verify_admin_token)):
     """Rebuild the knowledge base index from all stored documents.
     
     Re-processes all documents stored in the uploads directory.
@@ -708,10 +859,14 @@ document_hash_map = {}
 
 @app.post("/load_document/")
 async def load_document_upload(file: UploadFile = File(...), session_id: str = Form(...)):
-    """Upload and process a document file (PDF, DOCX, TXT, EPUB) for RAG. Supports multiple documents by merging."""
+    """Upload and process a document file (PDF, DOCX, TXT, EPUB) for RAG. Supports multiple documents by merging.
+    
+    Also adds the document to the persistent knowledge base so it's available
+    for WebSocket chat (not just document mode queries).
+    """
     print(f"Received document for processing: {file.filename}")
-    os.makedirs("temp_uploads", exist_ok=True)
-    os.makedirs("vectors", exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "temp_uploads"), exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "vectors"), exist_ok=True)
 
     # Check file type
     file_ext = file.filename.lower().split('.')[-1]
@@ -730,8 +885,13 @@ async def load_document_upload(file: UploadFile = File(...), session_id: str = F
     file_hash = get_file_hash(file_content)
     
     # Save uploaded file temporarily
-    file_location = f"temp_uploads/{file.filename}"
+    file_location = os.path.join(DATA_DIR, "temp_uploads", file.filename)
     with open(file_location, "wb") as f:
+        f.write(file_content)
+
+    # Also save permanently for KB rebuild capability (same as /kb/upload)
+    permanent_location = os.path.join(get_kb_uploads_path(), f"{file_hash}_{file.filename}")
+    with open(permanent_location, "wb") as f:
         f.write(file_content)
 
     try:
@@ -766,49 +926,55 @@ async def load_document_upload(file: UploadFile = File(...), session_id: str = F
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(documents)
         
-        # Check if session already has documents (merge scenario)
+        # === PER-SESSION STORE (for Document Mode queries) ===
         if session_id in vectorstore_cache:
-            # MERGE: Add new document to existing vectorstore
             print(f"Merging {file.filename} with existing documents in session {session_id}")
             existing_vectorstore = vectorstore_cache[session_id]
-            
-            # Create new vectorstore from new documents
             new_vectorstore = FAISS.from_documents(splits, get_embeddings())
-            
-            # Merge the two vectorstores
             existing_vectorstore.merge_from(new_vectorstore)
-            
-            # Save merged vectorstore
-            vectorstore_path = f"vectors/{session_id}"
+            vectorstore_path = os.path.join(DATA_DIR, "vectors", session_id)
             existing_vectorstore.save_local(vectorstore_path)
-            
             vectorstore_cache[session_id] = existing_vectorstore
-            
-            print(f"Successfully merged {file_ext.upper()} into existing collection")
-            return {
-                "message": f"Added {file.filename} to existing documents",
-                "filename": file.filename,
-                "file_type": file_ext.upper(),
-                "merged": True
-            }
         else:
-            # FIRST DOCUMENT: Create new vectorstore
             print(f"Creating new document collection for session {session_id}")
             vectorstore = FAISS.from_documents(splits, get_embeddings())
-            vectorstore_path = f"vectors/{session_id}"
+            vectorstore_path = os.path.join(DATA_DIR, "vectors", session_id)
             os.makedirs(vectorstore_path, exist_ok=True)
             vectorstore.save_local(vectorstore_path)
-
-            # Cache vectorstore
             vectorstore_cache[session_id] = vectorstore
-            
-            print(f"Successfully processed {file_ext.upper()}")
-            return {
-                "message": "Uploaded successfully",
-                "filename": file.filename,
-                "file_type": file_ext.upper(),
-                "merged": False
-            }
+
+        # === PERSISTENT KB (for WebSocket chat retrieval) ===
+        # Also add to the global persistent knowledge base so normal chat can use it
+        merged_global = False
+        existing_doc = get_document_by_hash(file_hash)
+        if not existing_doc:
+            try:
+                existing_vs = get_global_vectorstore()
+                if existing_vs is not None:
+                    print(f"Also adding {file.filename} to persistent knowledge base (merge)")
+                    new_vs = FAISS.from_documents(splits, get_embeddings())
+                    existing_vs.merge_from(new_vs)
+                    save_global_vectorstore()
+                    merged_global = True
+                else:
+                    print(f"Creating persistent knowledge base from {file.filename}")
+                    _global_vectorstore = FAISS.from_documents(splits, get_embeddings())
+                    save_global_vectorstore()
+                    merged_global = True
+                
+                add_document(file.filename, file_hash, file_ext.upper(), len(splits))
+                print(f"Added {file.filename} to persistent KB ({len(splits)} chunks)")
+            except Exception as kb_err:
+                print(f"Warning: Failed to add {file.filename} to persistent KB: {kb_err}")
+
+        print(f"Successfully processed {file_ext.upper()} for session {session_id}")
+        return {
+            "message": "Uploaded successfully",
+            "filename": file.filename,
+            "file_type": file_ext.upper(),
+            "merged": False,
+            "added_to_kb": merged_global,
+        }
 
     except Exception as e:
         print(f"Error processing document: {str(e)}")
@@ -830,7 +996,7 @@ async def query_document(body: dict = Body(...)):
     if not session_id or not prompt:
         return JSONResponse(status_code=400, content={"error": "session_id and prompt are required."})
     
-    vectorstore_path = f"vectors/{session_id}"
+    vectorstore_path = os.path.join(DATA_DIR, "vectors", session_id)
 
     # If vectorstore not cached, attempt to load from disk
     if session_id not in vectorstore_cache:
